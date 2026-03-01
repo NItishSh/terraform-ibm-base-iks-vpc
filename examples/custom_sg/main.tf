@@ -64,24 +64,58 @@ locals {
       machine_type     = "bx2.4x16"
       workers_per_zone = 2 # minimum of 2 is allowed when using single zone
       operating_system = "UBUNTU_24_64"
-    }
+    },
+    {
+      subnet_prefix                 = "default"
+      pool_name                     = "custom-sg"
+      machine_type                  = "bx2.4x16"
+      workers_per_zone              = 2
+      operating_system              = "UBUNTU_24_64"
+      additional_security_group_ids = [module.custom_sg["custom-worker-pool-sg"].security_group_id]
+    },
   ]
 }
+
+########################################################################################################################
+# Security groups
+# Creating some security group for illustration purpose in this example.
+# Real-world sg would have your own rules set in the `security_group_rules` input.
+########################################################################################################################
+
+module "custom_sg" {
+  for_each                     = toset(["custom-cluster-sg", "custom-worker-pool-sg", "custom-lb-sg", "custom-master-vpe-sg", "custom-registry-vpe-sg", "custom-kube-api-vpe-sg"])
+  source                       = "terraform-ibm-modules/security-group/ibm"
+  version                      = "2.8.9"
+  add_ibm_cloud_internal_rules = false
+  security_group_name          = each.key
+  security_group_rules         = []
+  resource_group               = module.resource_group.resource_group_id
+  vpc_id                       = ibm_is_vpc.vpc.id
+}
+
 
 module "iks_base" {
   source = "../.."
   # remove the above line and uncomment the below 2 lines to consume the module from the registry
   # source            = "terraform-ibm-modules/base-iks-vpc/ibm"
   # version           = "X.Y.Z" # Replace "X.Y.Z" with a release version to lock into a specific release
-  resource_group_id       = module.resource_group.resource_group_id
-  region                  = var.region
-  tags                    = var.resource_tags
-  cluster_name            = var.prefix
-  force_delete_storage    = true
-  vpc_id                  = ibm_is_vpc.vpc.id
-  vpc_subnets             = local.cluster_vpc_subnets
-  kube_version            = var.kube_version
-  worker_pools            = local.worker_pools
-  access_tags             = var.access_tags
-  disable_public_endpoint = false
+  resource_group_id                  = module.resource_group.resource_group_id
+  region                             = var.region
+  tags                               = var.resource_tags
+  cluster_name                       = var.prefix
+  force_delete_storage               = true
+  vpc_id                             = ibm_is_vpc.vpc.id
+  vpc_subnets                        = local.cluster_vpc_subnets
+  kube_version                       = var.kube_version
+  enable_vpc_cluster_version_upgrade = var.enable_vpc_cluster_version_upgrade
+  worker_pools                       = local.worker_pools
+  access_tags                        = var.access_tags
+  attach_ibm_managed_security_group  = true # true is the default
+  custom_security_group_ids          = [module.custom_sg["custom-cluster-sg"].security_group_id]
+  additional_lb_security_group_ids   = [module.custom_sg["custom-lb-sg"].security_group_id]
+  additional_vpe_security_group_ids = {
+    "master"   = [module.custom_sg["custom-master-vpe-sg"].security_group_id]
+    "api"      = [module.custom_sg["custom-kube-api-vpe-sg"].security_group_id]
+    "registry" = [module.custom_sg["custom-registry-vpe-sg"].security_group_id]
+  }
 }
