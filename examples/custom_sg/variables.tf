@@ -2,11 +2,6 @@
 # Input variables
 ########################################################################################################################
 
-variable "ibmcloud_api_key" {
-  type        = string
-  description = "The IBM Cloud api token"
-  sensitive   = true
-}
 
 variable "prefix" {
   type        = string

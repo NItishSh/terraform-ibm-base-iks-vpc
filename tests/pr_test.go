@@ -1,60 +1,407 @@
-// Tests in this file are run in the PR pipeline and the continuous testing pipeline
+// Tests in this file are run in the PR pipeline
 package test
 
 import (
+	"bytes"
+	"fmt"
+	"log"
+	"os"
+	"os/exec"
+	"strings"
 	"testing"
 
+	"github.com/IBM/go-sdk-core/v5/core"
+	"github.com/gruntwork-io/terratest/modules/files"
+	"github.com/gruntwork-io/terratest/modules/logger"
+	"github.com/gruntwork-io/terratest/modules/random"
+	"github.com/gruntwork-io/terratest/modules/terraform"
+	"github.com/terraform-ibm-modules/ibmcloud-terratest-wrapper/common"
+	"github.com/terraform-ibm-modules/ibmcloud-terratest-wrapper/testaddons"
+	"github.com/terraform-ibm-modules/ibmcloud-terratest-wrapper/testschematic"
+
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"github.com/terraform-ibm-modules/ibmcloud-terratest-wrapper/cloudinfo"
 	"github.com/terraform-ibm-modules/ibmcloud-terratest-wrapper/testhelper"
 )
 
-// Use existing resource group
-const resourceGroup = "geretain-test-resources"
-
-// Ensure every example directory has a corresponding test
-const advancedExampleDir = "examples/advanced"
+const fullyConfigurableTerraformDir = "solutions/fully-configurable"
+const customsgExampleDir = "examples/custom_sg"
 const basicExampleDir = "examples/basic"
+const quickStartTerraformDir = "solutions/quickstart"
+const resourceGroup = "geretain-test-base-iks-vpc"
 
-func setupOptions(t *testing.T, prefix string, dir string) *testhelper.TestOptions {
-	options := testhelper.TestOptionsDefaultWithVars(&testhelper.TestOptions{
+// Define a struct with fields that match the structure of the YAML data
+const yamlLocation = "../common-dev-assets/common-go-assets/common-permanent-resources.yaml"
+
+// Ensure there is one test per supported kube version
+const terraformVersion = "terraform_v1.12.2" // This should match the version in the ibm_catalog.json
+
+var (
+	sharedInfoSvc      *cloudinfo.CloudInfoService
+	permanentResources map[string]interface{}
+	kubeVersion1       string // used by TestRunFullyConfigurable, TestRunUpgradeFullyConfigurable, TestFSCloudInSchematic and TestRunMultiClusterExample
+	kubeVersion2       string // used by TestCustomSGExample and TestRunCustomsgExample
+	kubeVersion3       string // used by TestRunAdvancedExample and TestCrossKmsSupportExample
+	kubeVersion4       string // used by TestRunAddRulesToSGExample and TestRunBasicExample
+)
+
+// TestMain will be run before any parallel tests, used to set up a shared InfoService object to track region usage
+// for multiple tests
+func TestMain(m *testing.M) {
+	var err error
+	sharedInfoSvc, err = cloudinfo.NewCloudInfoServiceFromEnv("TF_VAR_ibmcloud_api_key", cloudinfo.CloudInfoServiceOptions{})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	permanentResources, err = common.LoadMapFromYaml(yamlLocation)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// Get kube versions
+	expectedKubeVersions := 4
+	validKubeVersions, err := sharedInfoSvc.GetKubeVersions("kubernetes")
+	if err != nil {
+		log.Fatalf("failed to get kube versions: %v", err)
+	}
+	kubeVersionCount := len(validKubeVersions)
+	if kubeVersionCount == 0 {
+		log.Fatal("kubernetes version list is empty")
+	}
+	kubeVars := []*string{&kubeVersion1, &kubeVersion2, &kubeVersion3, &kubeVersion4}
+
+	if kubeVersionCount < expectedKubeVersions {
+		log.Printf("Warning: Kube versions list returned by the API (%v) has less than %d valid versions hence some tests will run on duplicate versions.", validKubeVersions, expectedKubeVersions)
+	}
+
+	for i := 0; i < len(kubeVars); i++ {
+		idx := kubeVersionCount - 1 - i // count from the end
+
+		if idx < 0 {
+			idx = 0 // fallback
+		}
+		*kubeVars[i] = validKubeVersions[idx]
+	}
+
+	os.Exit(m.Run())
+}
+
+func validateEnvVariable(t *testing.T, varName string) string {
+	val, present := os.LookupEnv(varName)
+	require.True(t, present, "%s environment variable not set", varName)
+	require.NotEqual(t, "", val, "%s environment variable is empty", varName)
+	return val
+}
+
+func setupTerraform(t *testing.T, prefix, realTerraformDir string) *terraform.Options {
+	tempTerraformDir, err := files.CopyTerraformFolderToTemp(realTerraformDir, prefix)
+	require.NoError(t, err, "Failed to create temporary Terraform folder")
+	apiKey := validateEnvVariable(t, "TF_VAR_ibmcloud_api_key") // pragma: allowlist secret
+	region, err := testhelper.GetBestVpcRegion(apiKey, "../common-dev-assets/common-go-assets/cloudinfo-region-vpc-gen2-prefs.yaml", "eu-de")
+	require.NoError(t, err, "Failed to get best VPC region")
+
+	existingTerraformOptions := terraform.WithDefaultRetryableErrors(t, &terraform.Options{
+		TerraformDir: tempTerraformDir,
+		Vars: map[string]interface{}{
+			"prefix": prefix,
+			"region": region,
+		},
+		// Set Upgrade to true to ensure latest version of providers and modules are used by terratest.
+		// This is the same as setting the -upgrade=true flag with terraform.
+		Upgrade: true,
+	})
+
+	terraform.WorkspaceSelectOrNew(t, existingTerraformOptions, prefix)
+	_, err = terraform.InitAndApplyE(t, existingTerraformOptions)
+	require.NoError(t, err, "Init and Apply of temp existing resource failed")
+
+	return existingTerraformOptions
+}
+func setupQuickstartOptions(t *testing.T, prefix string) *testschematic.TestSchematicOptions {
+	apiKey := validateEnvVariable(t, "TF_VAR_ibmcloud_api_key") // pragma: allowlist secret
+	region, err := testhelper.GetBestVpcRegion(apiKey, "../common-dev-assets/common-go-assets/cloudinfo-region-vpc-gen2-prefs.yaml", "eu-de")
+	require.NoError(t, err, "Failed to get best VPC region")
+	options := testschematic.TestSchematicOptionsDefault(&testschematic.TestSchematicOptions{
 		Testing:       t,
-		TerraformDir:  dir,
 		Prefix:        prefix,
 		ResourceGroup: resourceGroup,
+		Region:        region,
+		TarIncludePatterns: []string{
+			"*.tf",
+			quickStartTerraformDir + "/*.tf", "scripts/*.*", "kubeconfig/README.md",
+			"modules/worker-pool/*.tf",
+			"modules/kube-audit/scripts/*.sh",
+		},
+		TemplateFolder:             quickStartTerraformDir,
+		Tags:                       []string{"test-schematic"},
+		DeleteWorkspaceOnFail:      false,
+		WaitJobCompleteMinutes:     360,
+		TerraformVersion:           terraformVersion,
+		CheckApplyResultForUpgrade: true,
 	})
+	options.TerraformVars = []testschematic.TestSchematicTerraformVar{
+		{Name: "ibmcloud_api_key", Value: options.RequiredEnvironmentVars["TF_VAR_ibmcloud_api_key"], DataType: "string", Secure: true},
+		{Name: "prefix", Value: options.Prefix, DataType: "string"},
+		{Name: "region", Value: region, DataType: "string"},
+		{Name: "existing_resource_group_name", Value: resourceGroup, DataType: "string"},
+		{Name: "size", Value: "mini", DataType: "string"},
+	}
 	return options
 }
 
-// Consistency test for the basic example
+func cleanupTerraform(t *testing.T, options *terraform.Options, prefix string) {
+	if t.Failed() && strings.ToLower(os.Getenv("DO_NOT_DESTROY_ON_FAILURE")) == "true" {
+		fmt.Println("Terratest failed. Debug the test and delete resources manually.")
+		return
+	}
+	logger.Log(t, "START: Destroy (existing resources)")
+	terraform.Destroy(t, options)
+	terraform.WorkspaceDelete(t, options, prefix)
+	logger.Log(t, "END: Destroy (existing resources)")
+}
+
+func createContainersApikey(t *testing.T, region string, rg string) {
+
+	err := os.Setenv("IBMCLOUD_API_KEY", validateEnvVariable(t, "TF_VAR_ibmcloud_api_key"))
+	require.NoError(t, err, "Failed to set IBMCLOUD_API_KEY environment variable")
+	scriptPath := "../common-dev-assets/scripts/iks-api-key-reset/reset_iks_api_key.sh"
+	cmd := exec.Command("bash", scriptPath, region, rg)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	// Execute the command
+	if err := cmd.Run(); err != nil {
+		log.Fatalf("Failed to execute script: %v\nStderr: %s", err, stderr.String())
+	}
+	// Print script output
+	fmt.Println(stdout.String())
+}
+
+func TestRunFullyConfigurableInSchematics(t *testing.T) {
+	t.Parallel()
+
+	// Provision resources first
+	prefix := fmt.Sprintf("iks-fc-%s", strings.ToLower(random.UniqueId()))
+	existingTerraformOptions := setupTerraform(t, prefix, "./existing-resources")
+
+	options := testschematic.TestSchematicOptionsDefault(&testschematic.TestSchematicOptions{
+		Testing:               t,
+		Prefix:                "iks-fc",
+		TarIncludePatterns:    []string{"*.tf", fullyConfigurableTerraformDir + "/*.*", fullyConfigurableTerraformDir + "/scripts/*.*", "scripts/*.*", "kubeconfig/README.md", "modules/kube-audit/*.*", "modules/worker-pool/*.tf", "modules/kube-audit/kubeconfig/README.md", "modules/kube-audit/scripts/*.sh", fullyConfigurableTerraformDir + "/kubeconfig/README.md", "modules/kube-audit/helm-charts/kube-audit/*.*", "modules/kube-audit/helm-charts/kube-audit/templates/*.*"},
+		TemplateFolder:        fullyConfigurableTerraformDir,
+		Tags:                  []string{"test-schematic"},
+		DeleteWorkspaceOnFail: false,
+		TerraformVersion:      terraformVersion,
+		Region:                terraform.Output(t, existingTerraformOptions, "region"),
+	})
+
+	rg := terraform.Output(t, existingTerraformOptions, "resource_group_name")
+
+	options.TerraformVars = []testschematic.TestSchematicTerraformVar{
+		{Name: "ibmcloud_api_key", Value: options.RequiredEnvironmentVars["TF_VAR_ibmcloud_api_key"], DataType: "string", Secure: true},
+		{Name: "prefix", Value: options.Prefix, DataType: "string"},
+		{Name: "cluster_name", Value: "cluster", DataType: "string"},
+		{Name: "kube_version", Value: kubeVersion1, DataType: "string"},
+		{Name: "existing_resource_group_name", Value: rg, DataType: "string"},
+		{Name: "existing_vpc_crn", Value: terraform.Output(t, existingTerraformOptions, "vpc_crn"), DataType: "string"},
+		{Name: "kms_encryption_enabled_cluster", Value: "true", DataType: "bool"},
+		{Name: "existing_kms_instance_crn", Value: permanentResources["hpcs_south_crn"], DataType: "string"},
+		{Name: "kms_encryption_enabled_boot_volume", Value: "true", DataType: "bool"},
+		{Name: "enable_secrets_manager_integration", Value: "true", DataType: "bool"},
+		{Name: "existing_secrets_manager_instance_crn", Value: permanentResources["secretsManagerCRN"], DataType: "string"},
+	}
+
+	createContainersApikey(t, options.Region, rg)
+
+	require.NoError(t, options.RunSchematicTest(), "This should not have errored")
+	cleanupTerraform(t, existingTerraformOptions, prefix)
+}
+
+func TestRunUpgradeFullyConfigurable(t *testing.T) {
+	t.Parallel()
+	// Provision existing resources first
+	prefix := fmt.Sprintf("iks-existing-%s", strings.ToLower(random.UniqueId()))
+	existingTerraformOptions := setupTerraform(t, prefix, "./existing-resources")
+	options := testschematic.TestSchematicOptionsDefault(&testschematic.TestSchematicOptions{
+		Testing:                    t,
+		Prefix:                     "fc-upg",
+		TarIncludePatterns:         []string{"*.tf", fullyConfigurableTerraformDir + "/*.*", fullyConfigurableTerraformDir + "/scripts/*.*", "scripts/*.*", "kubeconfig/README.md", "modules/kube-audit/*.*", "modules/kube-audit/kubeconfig/README.md", "modules/kube-audit/scripts/*.sh", fullyConfigurableTerraformDir + "/kubeconfig/README.md", "modules/kube-audit/helm-charts/kube-audit/*.*", "modules/kube-audit/helm-charts/kube-audit/templates/*.*", "modules/worker-pool/*.tf"},
+		TemplateFolder:             fullyConfigurableTerraformDir,
+		Tags:                       []string{"test-schematic"},
+		DeleteWorkspaceOnFail:      false,
+		TerraformVersion:           terraformVersion,
+		CheckApplyResultForUpgrade: true,
+		Region:                     terraform.Output(t, existingTerraformOptions, "region"),
+	})
+	rg := terraform.Output(t, existingTerraformOptions, "resource_group_name")
+	options.IgnoreUpdates = testhelper.Exemptions{List: []string{"module.kube_audit[0].helm_release.kube_audit"}}
+	options.IgnoreDestroys = testhelper.Exemptions{List: []string{"module.kube_audit[0].terraform_data.install_required_binaries[0]"}}
+	options.TerraformVars = []testschematic.TestSchematicTerraformVar{
+		// Required Core Variables
+		{Name: "ibmcloud_api_key", Value: options.RequiredEnvironmentVars["TF_VAR_ibmcloud_api_key"], DataType: "string", Secure: true},
+		{Name: "prefix", Value: options.Prefix, DataType: "string"},
+		{Name: "cluster_name", Value: "cluster", DataType: "string"},
+		{Name: "kube_version", Value: kubeVersion1, DataType: "string"},
+		{Name: "existing_resource_group_name", Value: terraform.Output(t, existingTerraformOptions, "resource_group_name"), DataType: "string"},
+		{Name: "existing_vpc_crn", Value: terraform.Output(t, existingTerraformOptions, "vpc_crn"), DataType: "string"},
+		{Name: "enable_secrets_manager_integration", Value: "true", DataType: "bool"},
+		{Name: "existing_secrets_manager_instance_crn", Value: permanentResources["secretsManagerCRN"], DataType: "string"},
+		{Name: "kms_encryption_enabled_cluster", Value: "true", DataType: "bool"},
+		{Name: "existing_kms_instance_crn", Value: permanentResources["hpcs_south_crn"], DataType: "string"},
+		{Name: "kms_encryption_enabled_boot_volume", Value: "true", DataType: "bool"},
+	}
+	createContainersApikey(t, options.Region, rg)
+	require.NoError(t, options.RunSchematicUpgradeTest(), "This should not have errored")
+	cleanupTerraform(t, existingTerraformOptions, prefix)
+}
+
+func TestRunCustomsgExample(t *testing.T) {
+	t.Parallel()
+
+	options := testhelper.TestOptionsDefaultWithVars(&testhelper.TestOptions{
+		Testing:          t,
+		TerraformDir:     customsgExampleDir,
+		Prefix:           "base-iks-customsg",
+		ResourceGroup:    resourceGroup,
+		CloudInfoService: sharedInfoSvc,
+		ImplicitDestroy: []string{
+			"module.iks_base.null_resource.confirm_network_healthy",
+		},
+		ImplicitRequired: false,
+		TerraformVars: map[string]interface{}{
+			"kube_version":                       kubeVersion2,
+			"access_tags":                        permanentResources["accessTags"],
+			"enable_vpc_cluster_version_upgrade": true,
+		},
+	})
+
+	createContainersApikey(t, options.Region, options.ResourceGroup)
+
+	output, err := options.RunTestConsistency()
+
+	assert.Nil(t, err, "This should not have errored")
+	assert.NotNil(t, output, "Expected some output")
+}
+
+/*******************************************************************
+* TESTS FOR THE TERRAFORM BASED QUICKSTART DEPLOYABLE ARCHITECTURE *
+********************************************************************/
+func TestRunQuickstartSchematics(t *testing.T) {
+	t.Parallel()
+
+	options := setupQuickstartOptions(t, "iks-qs")
+
+	createContainersApikey(t, options.Region, options.ResourceGroup)
+
+	err := options.RunSchematicTest()
+	assert.Nil(t, err, "This should not have errored")
+}
+
+// Upgrade test for the Quickstart DA
+func TestRunQuickstartUpgradeSchematics(t *testing.T) {
+	t.Parallel()
+
+	options := setupQuickstartOptions(t, "iks-qs-upg")
+
+	createContainersApikey(t, options.Region, options.ResourceGroup)
+
+	err := options.RunSchematicUpgradeTest()
+	if !options.UpgradeTestSkipped {
+		assert.Nil(t, err, "This should not have errored")
+	}
+}
+
+func TestIksAddonDefaultConfiguration(t *testing.T) {
+	t.Parallel()
+
+	options := testaddons.TestAddonsOptionsDefault(&testaddons.TestAddonOptions{
+		Testing:               t,
+		Prefix:                "iks-def",
+		ResourceGroup:         resourceGroup,
+		QuietMode:             false, // Suppress logs except on failure
+		OverrideInputMappings: core.BoolPtr(true),
+	})
+	region := "eu-de"
+
+	createContainersApikey(t, region, options.ResourceGroup)
+
+	options.AddonConfig = cloudinfo.NewAddonConfigTerraform(
+		options.Prefix,
+		"deploy-arch-ibm-slz-iks",
+		"fully-configurable",
+		map[string]interface{}{
+			"region":                       region,
+			"existing_resource_group_name": options.ResourceGroup,
+		},
+	)
+
+	//	use existing secrets manager instance to help prevent hitting trial instance limit in account
+	options.AddonConfig.Dependencies = []cloudinfo.AddonConfig{
+		{
+			OfferingName:   "deploy-arch-ibm-secrets-manager",
+			OfferingFlavor: "fully-configurable",
+			Inputs: map[string]interface{}{
+				"existing_secrets_manager_crn":         permanentResources["privateOnlySecMgrCRN"],
+				"service_plan":                         "__NULL__", // no plan value needed when using existing SM
+				"skip_secrets_manager_iam_auth_policy": true,       // since using an existing Secrets Manager instance, attempting to re-create auth policy can cause conflicts if the policy already exists
+				"secret_groups":                        []string{}, // passing empty array for secret groups as default value is creating general group and it will cause conflicts as we are using an existing SM
+			},
+		},
+		// // Disable target / route creation to help prevent hitting quota in account
+		{
+			OfferingName:   "deploy-arch-ibm-cloud-monitoring",
+			OfferingFlavor: "fully-configurable",
+			Inputs: map[string]interface{}{
+				"enable_metrics_routing_to_cloud_monitoring": false,
+			},
+		},
+		{
+			OfferingName:   "deploy-arch-ibm-activity-tracker",
+			OfferingFlavor: "fully-configurable",
+			Inputs: map[string]interface{}{
+				"enable_activity_tracker_event_routing_to_cloud_logs": false,
+			},
+		},
+	}
+
+	err := options.RunAddonTest()
+	require.NoError(t, err)
+}
+
+func setupOptions(t *testing.T, prefix string, terraformDir string, kubeVersion string) *testhelper.TestOptions {
+	options := testhelper.TestOptionsDefaultWithVars(&testhelper.TestOptions{
+		Testing:          t,
+		TerraformDir:     terraformDir,
+		Prefix:           prefix,
+		ResourceGroup:    resourceGroup,
+		CloudInfoService: sharedInfoSvc,
+		IgnoreUpdates: testhelper.Exemptions{ // Ignore for consistency check
+			List: []string{
+				"module.logs_agents.helm_release.logs_agent",
+			},
+		},
+		TerraformVars: map[string]interface{}{
+			"kube_version": kubeVersion,
+			"access_tags":  permanentResources["accessTags"],
+		},
+		CheckApplyResultForUpgrade: true,
+	})
+
+	return options
+}
+
 func TestRunBasicExample(t *testing.T) {
 	t.Parallel()
 
-	options := setupOptions(t, "mod-template-basic", basicExampleDir)
+	options := setupOptions(t, "base-iks", basicExampleDir, kubeVersion4)
+
+	createContainersApikey(t, options.Region, resourceGroup)
 
 	output, err := options.RunTestConsistency()
+
 	assert.Nil(t, err, "This should not have errored")
 	assert.NotNil(t, output, "Expected some output")
-}
-
-func TestRunAdvancedExample(t *testing.T) {
-	t.Parallel()
-
-	options := setupOptions(t, "mod-template-adv", advancedExampleDir)
-
-	output, err := options.RunTestConsistency()
-	assert.Nil(t, err, "This should not have errored")
-	assert.NotNil(t, output, "Expected some output")
-}
-
-// Upgrade test (using advanced example)
-func TestRunUpgradeExample(t *testing.T) {
-	t.Parallel()
-
-	options := setupOptions(t, "mod-template-adv-upg", advancedExampleDir)
-
-	output, err := options.RunTestUpgrade()
-	if !options.UpgradeTestSkipped {
-		assert.Nil(t, err, "This should not have errored")
-		assert.NotNil(t, output, "Expected some output")
-	}
 }
