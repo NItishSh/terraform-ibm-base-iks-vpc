@@ -287,3 +287,12 @@ module "logs_agents" {
   # example of how to add only kube-audit log source path
   logs_agent_system_logs = ["/var/log/audit/*.log"]
 }
+
+########################################################################################################################
+# Cluster Config Data Source
+########################################################################################################################
+
+data "ibm_container_cluster_config" "cluster_config" {
+  cluster_name_id   = module.iks_base.cluster_id
+  resource_group_id = module.resource_group.resource_group_id
+}
