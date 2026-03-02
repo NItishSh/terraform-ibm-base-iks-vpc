@@ -4,44 +4,45 @@
 
 # Resource Group Variables
 variable "resource_group_id" {
-  type        = string
   description = "The ID of an existing IBM Cloud resource group where the cluster is grouped."
+  type        = string
 }
 
 variable "region" {
-  type        = string
   description = "The IBM Cloud region where the cluster is provisioned."
+  type        = string
 }
 
 # Cluster Variables
 variable "tags" {
-  type        = list(string)
   description = "Metadata labels describing this cluster deployment, i.e. test"
+  type        = list(string)
   default     = []
 }
 
 variable "cluster_name" {
-  type        = string
   description = "The name that is assigned to the provisioned cluster."
+  type        = string
 }
 
 variable "vpc_subnets" {
+  description = "Metadata that describes the VPC's subnets. Obtain this information from the VPC where this cluster is created."
   type = map(list(object({
     id         = string
     zone       = string
     cidr_block = string
   })))
-  description = "Metadata that describes the VPC's subnets. Obtain this information from the VPC where this cluster is created."
 }
 
 variable "allow_default_worker_pool_replacement" {
-  type        = bool
   description = "(Advanced users) Set to true to allow the module to recreate a default worker pool."
+  type        = bool
   default     = false
   nullable    = false
 }
 
 variable "worker_pools" {
+  description = "List of worker pools"
   type = list(object({
     subnet_prefix = optional(string)
     vpc_subnets = optional(list(object({
@@ -66,9 +67,7 @@ variable "worker_pools" {
     }))
     additional_security_group_ids = optional(list(string))
   }))
-  description = "List of worker pools"
   validation {
-    error_message = "Provide a value for minSize and maxSize while enableAutoscaling is set to true."
     condition = length(
       flatten(
         [
@@ -84,6 +83,7 @@ variable "worker_pools" {
         ]
       )
     )
+    error_message = "Provide a value for minSize and maxSize while enableAutoscaling is set to true."
   }
   validation {
     condition     = length([for worker_pool in var.worker_pools : worker_pool if(worker_pool.subnet_prefix == null && worker_pool.vpc_subnets == null) || (worker_pool.subnet_prefix != null && worker_pool.vpc_subnets != null)]) == 0
@@ -99,8 +99,8 @@ variable "worker_pools" {
 }
 
 variable "worker_pools_taints" {
-  type        = map(list(object({ key = string, value = string, effect = string })))
   description = "Optional, Map of lists containing node taints by node-pool name"
+  type        = map(list(object({ key = string, value = string, effect = string })))
   default     = null
 }
 
@@ -124,22 +124,26 @@ variable "additional_lb_security_group_ids" {
   description = "Additional security groups to add to the load balancers associated with the cluster. Ensure that the `number_of_lbs` is set to the number of LBs associated with the cluster. This comes in addition to the IBM maintained security group."
   type        = list(string)
   default     = []
-  nullable    = false
+
   validation {
     condition     = var.additional_lb_security_group_ids == null ? true : length(var.additional_lb_security_group_ids) <= 4
     error_message = "Please provide at most 4 additional security groups."
   }
+
+  nullable = false
 }
 
 variable "number_of_lbs" {
   description = "The number of LBs to associated the `additional_lb_security_group_names` security group with."
   type        = number
   default     = 1
-  nullable    = false
+
   validation {
     condition     = var.number_of_lbs >= 1
     error_message = "Please set the number_of_lbs to a minimum of 1."
   }
+
+  nullable = false
 }
 
 variable "additional_vpe_security_group_ids" {
@@ -153,26 +157,26 @@ variable "additional_vpe_security_group_ids" {
 }
 
 variable "ignore_worker_pool_size_changes" {
-  type        = bool
   description = "Enable if using worker autoscaling. Stops Terraform managing worker count"
+  type        = bool
   default     = false
 }
 
 variable "kube_version" {
-  type        = string
   description = "The version of the Kubernetes cluster that should be provisioned. If no value is specified, the current default version is used. You can also specify `default`. This input is used only during initial cluster provisioning and is ignored for updates. To prevent possible destructive changes, update the cluster version outside of Terraform."
+  type        = string
   default     = null
 }
 
 variable "enable_vpc_cluster_version_upgrade" {
-  type        = bool
   description = "When set to true, allows Terraform to manage major Kubernetes version upgrades. This is intended for advanced users who manually control major version upgrades. Defaults to false to avoid unintended drift from IBM-managed patch updates."
+  type        = bool
   default     = false
 }
 
 variable "cluster_ready_when" {
-  type        = string
   description = "The cluster is ready based on one of the following:: MasterNodeReady (not recommended), OneWorkerNodeReady, Normal, IngressReady"
+  type        = string
   default     = "IngressReady"
 
   validation {
@@ -182,18 +186,19 @@ variable "cluster_ready_when" {
 }
 
 variable "disable_public_endpoint" {
-  type        = bool
   description = "Whether access to the public service endpoint is disabled when the cluster is created. Does not affect existing clusters. You can't disable a public endpoint on an existing cluster, so you can't convert a public cluster to a private cluster. To change a public endpoint to private, create another cluster with this input set to `true`."
+  type        = bool
   default     = false
 }
 
 variable "force_delete_storage" {
-  type        = bool
   description = "Flag indicating whether or not to delete attached storage when destroying the cluster - Default: false"
+  type        = bool
   default     = false
 }
 
 variable "kms_config" {
+  description = "Use to attach a KMS instance to the cluster. If account_id is not provided, defaults to the account in use."
   type = object({
     crk_id           = string
     instance_id      = string
@@ -201,13 +206,12 @@ variable "kms_config" {
     account_id       = optional(string)     # To attach KMS instance from another account
     wait_for_apply   = optional(bool, true) # defaults to true so terraform will wait until the KMS is applied to the master, ready and deployed
   })
-  description = "Use to attach a KMS instance to the cluster. If account_id is not provided, defaults to the account in use."
-  default     = null
+  default = null
 }
 
 variable "access_tags" {
-  type        = list(string)
   description = "A list of access tags to apply to the resources created by the module, see https://cloud.ibm.com/docs/account?topic=account-access-tags-tutorial for more details"
+  type        = list(string)
   default     = []
 
   validation {
@@ -219,36 +223,37 @@ variable "access_tags" {
 }
 
 variable "disable_outbound_traffic_protection" {
-  type        = bool
   description = "Whether to allow public outbound access from the cluster workers."
+  type        = bool
   default     = false
 }
 
 variable "pod_subnet_cidr" {
+  description = "Specify a custom subnet CIDR to provide private IP addresses for pods. The subnet must have a CIDR of at least `/23` or larger. Default value is `172.30.0.0/16` when the variable is set to `null`."
   type        = string
   default     = null
-  description = "Specify a custom subnet CIDR to provide private IP addresses for pods. The subnet must have a CIDR of at least `/23` or larger. Default value is `172.30.0.0/16` when the variable is set to `null`."
 }
 
 variable "service_subnet_cidr" {
+  description = "Specify a custom subnet CIDR to provide private IP addresses for services. The subnet must be at least `/24` or larger. Default value is `172.21.0.0/16` when the variable is set to `null`."
   type        = string
   default     = null
-  description = "Specify a custom subnet CIDR to provide private IP addresses for services. The subnet must be at least `/24` or larger. Default value is `172.21.0.0/16` when the variable is set to `null`."
 }
 
 # VPC Variables
 variable "vpc_id" {
-  type        = string
   description = "ID of the VPC instance where this cluster is provisioned."
+  type        = string
 }
 
 variable "verify_worker_network_readiness" {
-  type        = bool
   description = "By setting this to true, a script runs kubectl commands to verify that all worker nodes can communicate successfully with the master. If the runtime does not have access to the kube cluster to run kubectl commands, set this value to false."
+  type        = bool
   default     = true
 }
 
 variable "addons" {
+  description = "Map of IKS cluster add-on versions to install"
   type = object({
     debug-tool = optional(object({
       version         = optional(string)
@@ -271,27 +276,28 @@ variable "addons" {
       parameters_json = optional(string)
     }))
   })
-  description = "Map of IKS cluster add-on versions to install"
-  nullable    = false
-  default     = {}
+  default  = {}
+  nullable = false
 }
 
 variable "manage_all_addons" {
+  description = "Instructs Terraform to manage all cluster addons, even if addons were installed outside of the module. If set to 'true' this module destroys any addons that were installed by other sources."
   type        = bool
   default     = false
   nullable    = false # null values are set to default value
-  description = "Instructs Terraform to manage all cluster addons, even if addons were installed outside of the module. If set to 'true' this module destroys any addons that were installed by other sources."
 }
 
 variable "cluster_config_endpoint_type" {
   description = "Specify which type of endpoint to use for cluster config access: 'default', 'private', 'vpe', 'link'. A 'default' value uses the default endpoint of the cluster."
   type        = string
   default     = "default"
-  nullable    = false # use default if null is passed in
+
   validation {
-    error_message = "Invalid Endpoint Type! Valid values are 'default', 'private', 'vpe', or 'link'"
     condition     = contains(["default", "private", "vpe", "link"], var.cluster_config_endpoint_type)
+    error_message = "Invalid Endpoint Type! Valid values are 'default', 'private', 'vpe', or 'link'"
   }
+
+  nullable = false # use default if null is passed in
 }
 
 ##############################################################
@@ -299,6 +305,7 @@ variable "cluster_config_endpoint_type" {
 ##############################################################
 
 variable "cbr_rules" {
+  description = "The context-based restrictions rule to create. Only one rule is allowed."
   type = list(object({
     description = string
     account_id  = string
@@ -318,8 +325,8 @@ variable "cbr_rules" {
       }))
     })))
   }))
-  description = "The context-based restrictions rule to create. Only one rule is allowed."
-  default     = []
+  default = []
+
   validation {
     condition     = length(var.cbr_rules) <= 1
     error_message = "Only one CBR rule is allowed."
@@ -331,37 +338,39 @@ variable "cbr_rules" {
 ##############################################################
 
 variable "enable_secrets_manager_integration" {
-  type        = bool
   description = "Integrate with IBM Cloud Secrets Manager so you can centrally manage Ingress subdomain certificates and other secrets."
+  type        = bool
   default     = false
-  nullable    = false
+
   validation {
     condition     = var.enable_secrets_manager_integration ? var.existing_secrets_manager_instance_crn != null : true
     error_message = "'existing_secrets_manager_instance_crn' should be provided if setting 'enable_secrets_manager_integration' to true."
   }
+
+  nullable = false
 }
 
 variable "existing_secrets_manager_instance_crn" {
-  type        = string
   description = "CRN of the Secrets Manager instance where Ingress certificate secrets are stored. If 'enable_secrets_manager_integration' is set to true then this value is required."
+  type        = string
   default     = null
 }
 
 variable "secrets_manager_secret_group_id" {
-  type        = string
   description = "Secret group ID where Ingress secrets are stored in the Secrets Manager instance."
+  type        = string
   default     = null
 }
 
 variable "skip_iks_secrets_manager_iam_auth_policy" {
-  type        = bool
   description = "To skip creating auth policy that allows IKS cluster 'Manager' role access in the existing Secrets Manager instance for managing ingress certificates."
+  type        = bool
   default     = false
 }
 
 variable "install_required_binaries" {
+  description = "When set to true, a script will run to check if `kubectl` and `jq` exist on the runtime and if not attempt to download them from the public internet and install them to /tmp. Set to false to skip running this script."
   type        = bool
   default     = true
-  description = "When set to true, a script will run to check if `kubectl` and `jq` exist on the runtime and if not attempt to download them from the public internet and install them to /tmp. Set to false to skip running this script."
   nullable    = false
 }

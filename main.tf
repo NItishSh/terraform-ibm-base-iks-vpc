@@ -55,10 +55,10 @@ data "ibm_container_cluster_versions" "cluster_versions" {}
 ##############################################################################
 
 resource "ibm_container_vpc_cluster" "cluster" {
-  count                               = var.enable_vpc_cluster_version_upgrade ? 0 : (var.ignore_worker_pool_size_changes ? 0 : 1)
+  count = var.enable_vpc_cluster_version_upgrade ? 0 : (var.ignore_worker_pool_size_changes ? 0 : 1)
+
   name                                = var.cluster_name
   vpc_id                              = var.vpc_id
-  tags                                = var.tags
   kube_version                        = local.kube_version
   flavor                              = local.default_pool.machine_type
   worker_count                        = local.default_pool.workers_per_zone
@@ -78,9 +78,7 @@ resource "ibm_container_vpc_cluster" "cluster" {
 
   security_groups = local.cluster_security_groups
 
-  lifecycle {
-    ignore_changes = [kube_version]
-  }
+  tags = var.tags
 
   dynamic "zones" {
     for_each = local.default_pool.subnet_prefix != null ? var.vpc_subnets[local.default_pool.subnet_prefix] : local.default_pool.vpc_subnets
@@ -115,13 +113,17 @@ resource "ibm_container_vpc_cluster" "cluster" {
     create = local.create_timeout
     update = local.update_timeout
   }
+
+  lifecycle {
+    ignore_changes = [kube_version]
+  }
 }
 
 resource "ibm_container_vpc_cluster" "cluster_with_upgrade" {
-  count                               = var.enable_vpc_cluster_version_upgrade ? (var.ignore_worker_pool_size_changes ? 0 : 1) : 0
+  count = var.enable_vpc_cluster_version_upgrade ? (var.ignore_worker_pool_size_changes ? 0 : 1) : 0
+
   name                                = var.cluster_name
   vpc_id                              = var.vpc_id
-  tags                                = var.tags
   kube_version                        = local.kube_version
   flavor                              = local.default_pool.machine_type
   worker_count                        = local.default_pool.workers_per_zone
@@ -140,6 +142,8 @@ resource "ibm_container_vpc_cluster" "cluster_with_upgrade" {
   kms_account_id                      = local.default_pool.boot_volume_encryption_kms_config == null ? null : local.default_pool.boot_volume_encryption_kms_config.kms_account_id
 
   security_groups = local.cluster_security_groups
+
+  tags = var.tags
 
   dynamic "zones" {
     for_each = local.default_pool.subnet_prefix != null ? var.vpc_subnets[local.default_pool.subnet_prefix] : local.default_pool.vpc_subnets
@@ -177,10 +181,10 @@ resource "ibm_container_vpc_cluster" "cluster_with_upgrade" {
 }
 
 resource "ibm_container_vpc_cluster" "autoscaling_cluster" {
-  count                               = var.enable_vpc_cluster_version_upgrade ? 0 : (var.ignore_worker_pool_size_changes ? 1 : 0)
+  count = var.enable_vpc_cluster_version_upgrade ? 0 : (var.ignore_worker_pool_size_changes ? 1 : 0)
+
   name                                = var.cluster_name
   vpc_id                              = var.vpc_id
-  tags                                = var.tags
   kube_version                        = local.kube_version
   flavor                              = local.default_pool.machine_type
   worker_count                        = local.default_pool.workers_per_zone
@@ -199,51 +203,53 @@ resource "ibm_container_vpc_cluster" "autoscaling_cluster" {
   kms_account_id                      = local.default_pool.boot_volume_encryption_kms_config == null ? null : local.default_pool.boot_volume_encryption_kms_config.kms_account_id
 
   security_groups = local.cluster_security_groups
+
+  tags = var.tags
+
+  dynamic "zones" {
+    for_each = local.default_pool.subnet_prefix != null ? var.vpc_subnets[local.default_pool.subnet_prefix] : local.default_pool.vpc_subnets
+    content {
+      subnet_id = zones.value.id
+      name      = zones.value.zone
+    }
+  }
+
+  dynamic "taints" {
+    for_each = var.worker_pools_taints == null ? [] : concat(var.worker_pools_taints["all"], var.worker_pools_taints["default"])
+    content {
+      effect = taints.value.effect
+      key    = taints.value.key
+      value  = taints.value.value
+    }
+  }
+
+  dynamic "kms_config" {
+    for_each = var.kms_config != null ? [1] : []
+    content {
+      crk_id           = var.kms_config.crk_id
+      instance_id      = var.kms_config.instance_id
+      private_endpoint = var.kms_config.private_endpoint
+      account_id       = var.kms_config.account_id
+      wait_for_apply   = var.kms_config.wait_for_apply
+    }
+  }
+
+  timeouts {
+    delete = local.delete_timeout
+    create = local.create_timeout
+    update = local.update_timeout
+  }
 
   lifecycle {
     ignore_changes = [worker_count, kube_version]
   }
-
-  dynamic "zones" {
-    for_each = local.default_pool.subnet_prefix != null ? var.vpc_subnets[local.default_pool.subnet_prefix] : local.default_pool.vpc_subnets
-    content {
-      subnet_id = zones.value.id
-      name      = zones.value.zone
-    }
-  }
-
-  dynamic "taints" {
-    for_each = var.worker_pools_taints == null ? [] : concat(var.worker_pools_taints["all"], var.worker_pools_taints["default"])
-    content {
-      effect = taints.value.effect
-      key    = taints.value.key
-      value  = taints.value.value
-    }
-  }
-
-  dynamic "kms_config" {
-    for_each = var.kms_config != null ? [1] : []
-    content {
-      crk_id           = var.kms_config.crk_id
-      instance_id      = var.kms_config.instance_id
-      private_endpoint = var.kms_config.private_endpoint
-      account_id       = var.kms_config.account_id
-      wait_for_apply   = var.kms_config.wait_for_apply
-    }
-  }
-
-  timeouts {
-    delete = local.delete_timeout
-    create = local.create_timeout
-    update = local.update_timeout
-  }
 }
 
 resource "ibm_container_vpc_cluster" "autoscaling_cluster_with_upgrade" {
-  count                               = var.enable_vpc_cluster_version_upgrade ? (var.ignore_worker_pool_size_changes ? 1 : 0) : 0
+  count = var.enable_vpc_cluster_version_upgrade ? (var.ignore_worker_pool_size_changes ? 1 : 0) : 0
+
   name                                = var.cluster_name
   vpc_id                              = var.vpc_id
-  tags                                = var.tags
   kube_version                        = local.kube_version
   flavor                              = local.default_pool.machine_type
   worker_count                        = local.default_pool.workers_per_zone
@@ -263,9 +269,7 @@ resource "ibm_container_vpc_cluster" "autoscaling_cluster_with_upgrade" {
 
   security_groups = local.cluster_security_groups
 
-  lifecycle {
-    ignore_changes = [worker_count]
-  }
+  tags = var.tags
 
   dynamic "zones" {
     for_each = local.default_pool.subnet_prefix != null ? var.vpc_subnets[local.default_pool.subnet_prefix] : local.default_pool.vpc_subnets
@@ -299,6 +303,10 @@ resource "ibm_container_vpc_cluster" "autoscaling_cluster_with_upgrade" {
     delete = local.delete_timeout
     create = local.create_timeout
     update = local.update_timeout
+  }
+
+  lifecycle {
+    ignore_changes = [worker_count]
   }
 }
 
@@ -309,8 +317,8 @@ resource "ibm_container_vpc_cluster" "autoscaling_cluster_with_upgrade" {
 resource "ibm_resource_tag" "cluster_access_tag" {
   count       = length(var.access_tags) == 0 ? 0 : 1
   resource_id = local.cluster_crn
-  tags        = var.access_tags
   tag_type    = "access"
+  tags        = var.access_tags
 }
 
 ##############################################################################
@@ -344,8 +352,6 @@ module "worker_pools" {
 resource "null_resource" "confirm_network_healthy" {
   count = var.verify_worker_network_readiness ? 1 : 0
 
-  depends_on = [terraform_data.install_required_binaries, ibm_container_vpc_cluster.cluster, ibm_container_vpc_cluster.cluster_with_upgrade, ibm_container_vpc_cluster.autoscaling_cluster, ibm_container_vpc_cluster.autoscaling_cluster_with_upgrade, module.worker_pools]
-
   triggers = {
     verify_worker_network_readiness = var.verify_worker_network_readiness
   }
@@ -357,6 +363,8 @@ resource "null_resource" "confirm_network_healthy" {
       KUBECONFIG = data.ibm_container_cluster_config.cluster_config[0].config_file_path
     }
   }
+
+  depends_on = [terraform_data.install_required_binaries, ibm_container_vpc_cluster.cluster, ibm_container_vpc_cluster.cluster_with_upgrade, ibm_container_vpc_cluster.autoscaling_cluster, ibm_container_vpc_cluster.autoscaling_cluster_with_upgrade, module.worker_pools]
 }
 
 ##############################################################################
@@ -380,7 +388,6 @@ locals {
 }
 
 resource "ibm_container_addons" "addons" {
-  depends_on        = [ibm_container_vpc_cluster.cluster, ibm_container_vpc_cluster.cluster_with_upgrade, ibm_container_vpc_cluster.autoscaling_cluster, ibm_container_vpc_cluster.autoscaling_cluster_with_upgrade, module.worker_pools, null_resource.confirm_network_healthy]
   cluster           = local.cluster_id
   resource_group_id = var.resource_group_id
 
@@ -398,6 +405,8 @@ resource "ibm_container_addons" "addons" {
   timeouts {
     create = "1h"
   }
+
+  depends_on = [ibm_container_vpc_cluster.cluster, ibm_container_vpc_cluster.cluster_with_upgrade, ibm_container_vpc_cluster.autoscaling_cluster, ibm_container_vpc_cluster.autoscaling_cluster_with_upgrade, module.worker_pools, null_resource.confirm_network_healthy]
 }
 
 locals {
@@ -413,8 +422,7 @@ locals {
 }
 
 resource "null_resource" "config_map_status" {
-  count      = lookup(var.addons, "cluster-autoscaler", null) != null ? 1 : 0
-  depends_on = [terraform_data.install_required_binaries, ibm_container_addons.addons]
+  count = lookup(var.addons, "cluster-autoscaler", null) != null ? 1 : 0
 
   triggers = {
     cluster_autoscaler = lookup(var.addons, "cluster-autoscaler", null) != null
@@ -426,11 +434,12 @@ resource "null_resource" "config_map_status" {
       KUBECONFIG = data.ibm_container_cluster_config.cluster_config[0].config_file_path
     }
   }
+
+  depends_on = [terraform_data.install_required_binaries, ibm_container_addons.addons]
 }
 
 resource "kubernetes_config_map_v1_data" "set_autoscaling" {
-  count      = lookup(var.addons, "cluster-autoscaler", null) != null ? 1 : 0
-  depends_on = [null_resource.config_map_status]
+  count = lookup(var.addons, "cluster-autoscaler", null) != null ? 1 : 0
 
   metadata {
     name      = "iks-ca-configmap"
@@ -442,6 +451,8 @@ resource "kubernetes_config_map_v1_data" "set_autoscaling" {
   }
 
   force = true
+
+  depends_on = [null_resource.config_map_status]
 }
 
 ##############################################################################
@@ -582,26 +593,32 @@ module "existing_secrets_manager_instance_parser" {
 }
 
 resource "ibm_iam_authorization_policy" "iks_secrets_manager_iam_auth_policy" {
-  count                       = var.enable_secrets_manager_integration && !var.skip_iks_secrets_manager_iam_auth_policy ? 1 : 0
-  depends_on                  = [ibm_container_vpc_cluster.cluster, ibm_container_vpc_cluster.autoscaling_cluster, ibm_container_vpc_cluster.cluster_with_upgrade, ibm_container_vpc_cluster.autoscaling_cluster_with_upgrade, module.worker_pools]
+  count = var.enable_secrets_manager_integration && !var.skip_iks_secrets_manager_iam_auth_policy ? 1 : 0
+
   source_service_name         = "containers-kubernetes"
   source_resource_instance_id = local.cluster_id
   target_service_name         = "secrets-manager"
   target_resource_instance_id = module.existing_secrets_manager_instance_parser[0].service_instance
   roles                       = ["Manager"]
+
+  depends_on = [ibm_container_vpc_cluster.cluster, ibm_container_vpc_cluster.autoscaling_cluster, ibm_container_vpc_cluster.cluster_with_upgrade, ibm_container_vpc_cluster.autoscaling_cluster_with_upgrade, module.worker_pools]
 }
 
 resource "time_sleep" "wait_for_auth_policy" {
-  count           = var.enable_secrets_manager_integration ? 1 : 0
-  depends_on      = [ibm_iam_authorization_policy.iks_secrets_manager_iam_auth_policy[0]]
+  count = var.enable_secrets_manager_integration ? 1 : 0
+
   create_duration = "30s"
+
+  depends_on = [ibm_iam_authorization_policy.iks_secrets_manager_iam_auth_policy[0]]
 }
 
 resource "ibm_container_ingress_instance" "instance" {
-  count           = var.enable_secrets_manager_integration ? 1 : 0
-  depends_on      = [time_sleep.wait_for_auth_policy]
+  count = var.enable_secrets_manager_integration ? 1 : 0
+
   cluster         = var.cluster_name
   instance_crn    = var.existing_secrets_manager_instance_crn
   is_default      = true
   secret_group_id = var.secrets_manager_secret_group_id
+
+  depends_on = [time_sleep.wait_for_auth_policy]
 }
